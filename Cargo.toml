@@ -1,0 +1,19 @@
+[package]
+name = "wallpaper"
+version = "0.1.0"
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[[bin]]
+name = "wp_daemon"
+path = "src/daemon/daemon.rs"
+
+[[bin]]
+name = "wp_cli"
+path = "src/cli/client.rs"
+
+[dependencies]
+log = "0.4.14"
+pretty_env_logger = "0.4.0"
+rand = "0.8.4"
