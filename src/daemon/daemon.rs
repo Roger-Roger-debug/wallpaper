@@ -4,7 +4,6 @@ use std::io::Read;
 use std::mem::size_of;
 use std::os::unix::net::*;
 use std::process::{Command, exit};
-use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, sleep};
 use std::time::Duration;
@@ -14,11 +13,8 @@ use rand::prelude::*;
 
 use log::info;
 
-
 //TODO: error handling
-struct Stop {}
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Action {
     Random,
     Linear,
@@ -63,7 +59,7 @@ impl State {
             self.shuffle();
         }
 
-        self.update(false);
+        self.update();
     }
 
     fn shuffle(&mut self) {
@@ -79,18 +75,19 @@ impl State {
             self.index -= 1;
         }
 
-        self.update(false);
+        self.update();
     }
 
-    fn update(&self, force: bool) {
+    fn update(&self) {
         if let Action::Static(path) = &self.action {
-            if force {
-                info!("Forcing no horni");
-                Command::new("feh")
-                    .arg("--bg-scale")
-                    .arg(path.as_ref().unwrap()) //Don't force with none static
-                    .spawn()
-                    .unwrap();
+            if let Some(path) = path {
+                if std::path::Path::new(path).exists() {
+                    Command::new("feh")
+                        .arg("--bg-scale")
+                        .arg(path)
+                        .spawn()
+                        .unwrap();
+                }
             }
         } else {
             let file = self.images.get(self.index).unwrap();
@@ -114,7 +111,7 @@ impl State {
         if self.no_horni {
             let path = self.path.clone() + "/foh0n427ez471.png";
             self.action = Action::Static(Some(path.try_into().unwrap()));
-            self.update(true);
+            self.update();
         } else {
             self.action = Action::Random;
             self.next();
@@ -128,34 +125,19 @@ impl State {
     fn get_current_image(&self) -> &OsString {
         &self.images[self.index]
     }
+
+    fn get_action(&self) -> Action {
+        self.action.clone()
+    }
 }
 
 fn main() {
     pretty_env_logger::init();
 
     let socket_path = "/tmp/test.socket";
-
-    let (tx, rx) = channel();
-
-    thread::spawn(move|| setup(tx, socket_path));
-
-    loop { //Don't quite the program
-        let _msg = rx.recv().unwrap();
-        info!("Stopping Server");
-        break;
-    }
-
-    fs::remove_file(socket_path).expect("Can't delete socket");
-
-    exit(0);
-}
-
-// Listen for incoming Connections
-fn setup(main_thread: Sender<Stop>, socket_path: &str) {
     let time = Duration::new(60, 0);
-
     let data = Arc::new(Mutex::new(State::
-                                   new(Action::Random,
+                                   new(Action::Linear,
                                         time, format!("{}/Pictures/backgrounds/",
                                         std::env::var("HOME").unwrap()))));
 
@@ -168,10 +150,17 @@ fn setup(main_thread: Sender<Stop>, socket_path: &str) {
     thread::spawn(move || change_interval(d));
 
     while let Some(stream) = incoming.next() {
-        let tx2 = main_thread.clone();
         let d = data.clone();
-        thread::spawn(move || handle_connection(stream.unwrap(), d, tx2.clone()));
+        let handle = thread::spawn(move || handle_connection(stream.unwrap(), d));
+        if let Ok(res) = handle.join() {
+            if res {
+                break;
+            }
+        }
     }
+
+    fs::remove_file(socket_path).expect("Can't delete socket");
+    exit(0);
 }
 
 fn read_from_stream(mut stream: &UnixStream) -> String {
@@ -211,7 +200,7 @@ fn read_from_stream(mut stream: &UnixStream) -> String {
 }
 
 // Thread: Client <---> Server
-fn handle_connection(mut stream: UnixStream, state: Arc<Mutex<State>>, main_thread: Sender<Stop>) {
+fn handle_connection(mut stream: UnixStream, state: Arc<Mutex<State>>) -> bool {
     use std::io::prelude::*;
     info!("Handle new connection");
     let mut line = read_from_stream(&stream);
@@ -221,14 +210,21 @@ fn handle_connection(mut stream: UnixStream, state: Arc<Mutex<State>>, main_thre
     info!("Got {}", &line);
     let splits: Vec<&str> = line.split(' ').collect();
     let tupl = (splits.get(0).unwrap_or(&"").to_owned(), splits.get(1));
+    let mut stop_server = false;
     match tupl {
-        ("stop", _)=> main_thread.send(Stop {}).unwrap(),
-        ("exit", _) => main_thread.send(Stop {}).unwrap(),
+        ("stop" | "exit", _)=> stop_server = true,
         ("next", _) => state.lock().unwrap().next(),
         ("prev", _) => state.lock().unwrap().prev(),
         ("rng", _) => state.lock().unwrap().update_action(Action::Random),
         ("lin", _) => state.lock().unwrap().update_action(Action::Linear),
-        ("hold", _) => state.lock().unwrap().update_action(Action::Static(None)),
+        ("hold", img) => {
+            if let Some(img) = img {
+                let img = img.to_string();
+                state.lock().unwrap().update_action(Action::Static(Some(img.into())));
+            } else {
+                state.lock().unwrap().update_action(Action::Static(None));
+            }
+        },
         ("update", _) => state.lock().unwrap().update_dir(),
         ("save", _) => state.lock().unwrap().save(),
         ("shf", _) => state.lock().unwrap().shuffle(),
@@ -238,8 +234,21 @@ fn handle_connection(mut stream: UnixStream, state: Arc<Mutex<State>>, main_thre
                 state.lock().unwrap().change_interval = d;
             }
         }
-        ("get", _) => {
-            response = Some(state.lock().unwrap().get_current_image().clone().to_str().unwrap_or("ERROR").to_owned())
+        ("get", d) => {
+            if let Some(d) = d {
+                response = match *d {
+                    "wp" | "wallapper" => Some(state.lock().unwrap().get_current_image().clone().to_str().unwrap_or("ERROR").to_owned()),
+                    "ac" | "action" => {
+                        let action = state.lock().unwrap().get_action();
+                        match action {
+                            Action::Linear => Some("Linear".to_string()),
+                            Action::Static(_) => Some("Linear".to_string()),
+                            Action::Random => Some("Linear".to_string()),
+                        }
+                    },
+                    _ => Some("Wrong argument(s)".to_owned())
+                }
+            }
         },
         _ => response = Some("Wrong argument(s)".to_owned()),
     }
@@ -249,6 +258,8 @@ fn handle_connection(mut stream: UnixStream, state: Arc<Mutex<State>>, main_thre
     } else {
         stream.write(b"").unwrap();
     }
+
+    stop_server
 }
 
 fn change_interval(data: Arc<Mutex<State>>) {
