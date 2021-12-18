@@ -65,25 +65,28 @@ impl State {
     }
 
     pub fn update(&self) {
-        if let Action::Static(path) = &self.action {
+        let path = if let Action::Static(path) = &self.action {
             if let Some(path) = path {
                 if std::path::Path::new(path).exists() {
-                info!("Changing background to {:?}", path);
-                    Command::new("feh")
-                        .arg("--bg-scale")
-                        .arg(path)
-                        .spawn()
-                        .unwrap();
+                    Some(path)
+                } else {
+                    None
                 }
+            } else {
+                None
             }
         } else {
             let file = self.images.get(self.index).unwrap();
-            info!("Changing background to {:?}", file);
-            Command::new("feh")
+            Some(file)
+        };
+        if let Some(path) = path {
+            info!("Changing background to {:?}", path);
+            let mut process = Command::new("feh")
                 .arg("--bg-scale")
-                .arg(&file)
+                .arg(path)
                 .spawn()
                 .unwrap();
+            process.wait().unwrap();
         }
     }
 
