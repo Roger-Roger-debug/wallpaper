@@ -16,6 +16,28 @@ mod args;
 
 use state::State;
 
+const HELP: &str = "Usage:
+    wp <option> [argument]
+
+Options:
+    help: show this help
+    stop: stop the server
+    next: show the next image
+    prev: show the previous image
+    rng: change mode to random
+    linear: change mode to linear
+    hold: don't change the current wallpaper
+    update: update image folder
+    save: no horni
+    shuffle: shuffle wallpaper queue
+    interval: get the current interval
+    get: get [argument]
+
+Arguments:
+    wp | wallpaper: get the current wallpaper
+    ac | actions: get the current action
+    dur| duration: get the current interval";
+
 //TODO: error handling
 #[derive(Debug, Clone)]
 pub enum Action {
@@ -110,6 +132,7 @@ fn handle_connection(mut stream: UnixStream, state: Arc<Mutex<State>>) -> bool {
             Stop => stop_server = true,
             Next => state.lock().unwrap().next(),
             Prev => state.lock().unwrap().prev(),
+            Help => response = HELP.to_string(),
             RNG => state.lock().unwrap().update_action(Action::Random),
             Linear => state.lock().unwrap().update_action(Action::Linear),
             Update => state.lock().unwrap().update_dir(),

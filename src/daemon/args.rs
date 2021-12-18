@@ -21,6 +21,7 @@ impl TryFrom<&str> for MessageArgs {
 }
 
 pub enum Args {
+    Help,
     Stop,
     Next,
     Prev,
@@ -74,6 +75,7 @@ impl TryFrom<&str> for Args {
                     Err("Not recognized")
                 }
             },
+            "help" => Ok(Help),
             _ => Err("Not recognized"),
         }
     }
