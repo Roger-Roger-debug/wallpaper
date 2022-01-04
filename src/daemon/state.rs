@@ -1,36 +1,45 @@
-use std::{convert::TryInto, path::PathBuf, process::Command, time::Duration};
-use rand::{prelude::SliceRandom, thread_rng};
 use log::info;
+use rand::{prelude::SliceRandom, thread_rng};
+use std::{path::PathBuf, process::Command, time::Duration};
 
 use crate::Action;
 
 pub struct State {
     action: Action,
+    old_action: Action,
     change_interval: Duration,
     path: String,
     images: Vec<PathBuf>,
     index: usize,
-    no_horni: bool,
+    use_fallback: bool,
+    default: PathBuf,
 }
 
 impl State {
-    pub fn new(action: Action, change_interval: Duration, path: String) -> Self {
+    pub fn new(change_interval: Duration, path: String, default: PathBuf) -> Self {
         let images = State::get_images(&path);
-        State {
-            action,
+        let state = State {
+            action: Action::Static(Some(default.clone())),
+            old_action: Action::Static(Some(default.clone())),
             change_interval,
             path,
             images,
             index: 0,
-            no_horni: false,
-        }
+            use_fallback: false,
+            default,
+        };
+        state.update();
+        state
     }
 
     pub fn get_images(path: &str) -> Vec<PathBuf> {
-        std::fs::read_dir(path).unwrap() //read dir
-            .into_iter().map(|item| {
+        std::fs::read_dir(path)
+            .unwrap() //read dir
+            .into_iter()
+            .map(|item| {
                 item.unwrap().path() //convert to abs. path
-            }).collect::<Vec<PathBuf>>()
+            })
+            .collect::<Vec<PathBuf>>()
     }
 
     pub fn next(&mut self) {
@@ -54,7 +63,7 @@ impl State {
     }
 
     pub fn prev(&mut self) {
-        info!("Going to next previous");
+        info!("Going to previous image");
         if self.index == 0 {
             self.index = self.images.len() - 1;
         } else {
@@ -65,19 +74,18 @@ impl State {
     }
 
     pub fn update(&self) {
-        let path = if let Action::Static(path) = &self.action {
-            if let Some(path) = path {
+        let path = match &self.action {
+            Action::Static(path) => path.as_ref().and_then(|path| {
                 if std::path::Path::new(path).exists() {
                     Some(path)
                 } else {
                     None
                 }
-            } else {
-                None
+            }),
+            _ => {
+                let file = self.images.get(self.index).unwrap();
+                Some(file)
             }
-        } else {
-            let file = self.images.get(self.index).unwrap();
-            Some(file)
         };
         if let Some(path) = path {
             info!("Changing background to {:?}", path);
@@ -90,20 +98,23 @@ impl State {
         }
     }
 
-    pub fn update_action(&mut self, action: Action) {
+    pub fn update_action(&mut self, action: Action, update: bool) {
         info!("Setting action to {:?}", action);
         self.action = action;
+        if update {
+            self.update();
+        }
     }
 
     pub fn save(&mut self) {
-        self.no_horni = !self.no_horni;
-        info!("Setting horni to {}", self.no_horni);
-        if self.no_horni {
-            let path = self.path.clone() + "/foh0n427ez471.png";
-            self.action = Action::Static(Some(path.try_into().unwrap()));
+        self.use_fallback = !self.use_fallback;
+        info!("Setting fallback to {}", self.use_fallback);
+        if self.use_fallback {
+            self.old_action = self.action.clone();
+            self.action = Action::Static(Some(self.default.clone()));
             self.update();
         } else {
-            self.action = Action::Random;
+            self.action = self.old_action.clone();
             self.next();
         }
     }

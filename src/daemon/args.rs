@@ -3,7 +3,7 @@ use std::{convert::TryFrom, path::PathBuf, time::Duration};
 pub enum MessageArgs {
     Wallpaper,
     Action,
-    Duration
+    Duration,
 }
 
 impl TryFrom<&str> for MessageArgs {
@@ -55,7 +55,7 @@ impl TryFrom<&str> for Args {
                     None => None,
                 };
                 Ok(Hold(string))
-            },
+            }
             "update" => Ok(Update),
             "save" => Ok(Save),
             "shuffle" | "shl" => Ok(Shuffle),
@@ -74,7 +74,7 @@ impl TryFrom<&str> for Args {
                 } else {
                     Err("Not recognized")
                 }
-            },
+            }
             "help" => Ok(Help),
             _ => Err("Not recognized"),
         }
