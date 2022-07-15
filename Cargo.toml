@@ -1,7 +1,7 @@
 [package]
 name = "wallpaper"
-version = "0.3.0"
-edition = "2018"
+version = "1.0.0"
+edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -10,11 +10,19 @@ name = "wallpaperd"
 path = "src/daemon/daemon.rs"
 
 [[bin]]
-name = "wp_cli"
+name = "wp"
 path = "src/cli/client.rs"
 
+[lib]
+name = "common"
+path = "src/common/lib.rs"
+
+[profile.release]
+strip = true  # Automatically strip symbols from the binary.
+
 [dependencies]
-log = "0.4.14"
+log = "0.4.17"
 pretty_env_logger = "0.4.0"
-rand = "0.8.4"
-clap = { version = "3.0.1", features = ["cargo", "env"] }
+rand = "0.8.5"
+clap = { version = "3.2.11", features = ["derive", "cargo"] }
+ctrlc = { version = "3.2.2", features = ["termination"] }

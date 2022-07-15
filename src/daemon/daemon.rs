@@ -1,7 +1,7 @@
-use std::convert::TryFrom;
-use std::fs;
-use std::io::Read;
+use std::fs::{self, File};
+use std::io::{Read, Write};
 use std::os::unix::net::*;
+use std::os::unix::prelude::{FromRawFd, RawFd};
 use std::path::PathBuf;
 use std::process::exit;
 use std::str::FromStr;
@@ -9,36 +9,14 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, sleep};
 use std::time::Duration;
 
+use clap::{Args, Parser, Subcommand};
 use log::info;
 
-mod args;
+use common;
+
 mod state;
 
 use state::State;
-
-use clap::{app_from_crate, arg};
-
-const HELP: &str = "Usage:
-    wp <option> [argument]
-
-Options:
-    help: show this help
-    stop: stop the server
-    next: show the next image
-    prev: show the previous image
-    rng: change mode to random
-    linear: change mode to linear
-    hold: don't change the current wallpaper
-    update: update image folder
-    save: no horni
-    shuffle: shuffle wallpaper queue
-    interval: get the current interval
-    get: get [argument]
-
-Arguments:
-    wp | wallpaper: get the current wallpaper
-    ac | actions: get the current action
-    dur| duration: get the current interval";
 
 //TODO: error handling
 #[derive(Debug, Clone)]
@@ -48,46 +26,100 @@ pub enum Action {
     Static(Option<PathBuf>),
 }
 
+#[derive(Parser, Debug)]
+#[clap(version)]
+pub struct Cli {
+    /// Image to show by default
+    #[clap(short, long, value_parser, value_name = "FILE")]
+    default_image: PathBuf,
+    /// Socket for communication
+    #[clap(short, long, value_parser, value_name = "FILE")]
+    socket: Option<PathBuf>,
+    /// Directory to search for images, defaults to $HOME/Pictures/backgrounds
+    #[clap(short, long, value_parser, value_name = "DIRECTORY")]
+    image_directory: Option<PathBuf>,
+    /// Time in seconds between wallpaper changes
+    #[clap(long, parse(try_from_str = parse_duration))]
+    interval: Option<Duration>,
+    /// File descriptor to write to to signal readiness
+    #[clap(long, default_value_t = 1)]
+    fd: RawFd,
+    #[clap(subcommand)]
+    pub method: WallpaperMethod,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum WallpaperMethod {
+    Feh,
+    Hyprpaper(HyprpaperOptions),
+}
+
+#[derive(Args, Debug)]
+pub struct HyprpaperOptions {
+    #[clap(subcommand)]
+    monitor: HyprpaperMonitor,
+}
+
+#[derive(Subcommand, Clone, Debug)]
+pub enum HyprpaperMonitor {
+    //All,
+    List {
+        #[clap(value_parser)]
+        list: Vec<String>,
+    },
+}
+
+fn parse_duration(arg: &str) -> Result<std::time::Duration, std::num::ParseIntError> {
+    let seconds = arg.parse()?;
+    Ok(std::time::Duration::from_secs(seconds))
+}
+
 fn main() {
     pretty_env_logger::init();
 
-    let matches = app_from_crate!()
-        .arg(arg!(-f --fallback <PATH> "required field that specifies which image to desplay as a fallback").required(true))
-        .arg(arg!(-p --path [PATH]))
-        .arg(arg!(-s --socket [PATH]))
-        //.arg(arg!(--duration <SECONDS>))
-        //.arg(arg!(-a --action [ACTION]))
-        .get_matches();
-
-    let default_image_path = PathBuf::from_str(
-        matches
-            .value_of("fallback")
-            .expect("Default image was not provided"),
-    )
-    .expect("Invalid imate path");
-    let socket_path = match matches.value_of("socket") {
-        Some(val) => PathBuf::from_str(val).expect("Invalid socket path"),
-        None => {
-            if let Ok(path) = std::env::var("XDG_RUNTIME_DIR") {
-                PathBuf::from_str(&format!("{}/wallpaperd", path)).expect("Invalid XDG_RUNTIME_DIR")
-            } else {
-                PathBuf::from_str("/tmp/wallpaperd").unwrap()
-            }
+    let cli = Cli::parse();
+    info!("Command run was:\n{:?}", &cli);
+    let socket = cli.socket.unwrap_or_else(|| {
+        if let Ok(path) = std::env::var("XDG_RUNTIME_DIR") {
+            let mut pathbuf = PathBuf::new();
+            pathbuf.push(path);
+            pathbuf.push("wallpaperd");
+            pathbuf
+        } else {
+            PathBuf::from_str("/tmp/wallpaperd").unwrap()
         }
-    };
+    });
 
-    let image_dir = match matches.value_of("path") {
-        Some(val) => val.to_string(),
-        None => format!("{}/Pictures/backgrounds/", std::env::var("HOME").unwrap()),
-    };
+    let s = socket.clone();
+    ctrlc::set_handler(move || {
+        if let Err(_) = fs::remove_file(&s) {
+            log::error!("Couldn't delete socket file");
+        }
+        exit(0);
+    })
+    .expect("Error setting signal hooks");
 
-    let time = Duration::new(60, 0);
-    let data = Arc::new(Mutex::new(State::new(time, image_dir, default_image_path)));
+    let image_dir = cli.image_directory.unwrap_or_else(|| {
+        let mut pathbuf = PathBuf::new();
+        pathbuf.push(std::env::var("HOME").expect("$HOME not set"));
+        pathbuf.push(PathBuf::from("Pictures/backgrounds"));
+        pathbuf
+    });
 
-    let listener = UnixListener::bind(&socket_path).unwrap();
+    let time = cli.interval.unwrap_or(Duration::new(60, 0));
+    let data = Arc::new(Mutex::new(State::new(
+        time,
+        image_dir,
+        cli.default_image,
+        cli.method,
+    )));
+
+    info!("Binding socket {:?}", socket);
+    let listener = UnixListener::bind(&socket).unwrap();
     let mut incoming = listener.incoming();
 
-    info!("Binding socket {:?}", socket_path);
+    let mut file = unsafe { File::from_raw_fd(cli.fd) };
+    write!(&mut file, "\n").unwrap();
 
     let d = data.clone();
     thread::spawn(move || change_interval(d));
@@ -102,7 +134,9 @@ fn main() {
         }
     }
 
-    fs::remove_file(socket_path).expect("Can't delete socket");
+    if let Err(_) = fs::remove_file(&socket) {
+        log::error!("Couldn't delete socket file");
+    }
     exit(0);
 }
 
@@ -124,8 +158,15 @@ fn read_from_stream(mut stream: &UnixStream) -> String {
     }
 }
 
+#[derive(Parser)]
+struct ClientMessage {
+    #[clap(subcommand)]
+    command: common::Command,
+}
+
 // Thread: Client <---> Server
 fn handle_connection(mut stream: UnixStream, state: Arc<Mutex<State>>) -> bool {
+    use common::*;
     use std::io::prelude::*;
     info!("Handle new connection");
     let mut line = read_from_stream(&stream);
@@ -133,63 +174,59 @@ fn handle_connection(mut stream: UnixStream, state: Arc<Mutex<State>>) -> bool {
 
     line = line.to_lowercase();
     info!("Got {}", &line);
-    let message = args::Args::try_from(line.as_str());
+    let mut split: Vec<&str> = line.split(" ").collect();
+    split.insert(0, " ");
     let mut stop_server = false;
-    if let Ok(message) = message {
-        use args::Args::*;
-        use args::*;
-        match message {
-            Stop => stop_server = true,
-            Next => state.lock().unwrap().next(),
-            Prev => state.lock().unwrap().prev(),
-            Help => response = HELP.to_string(),
-            RNG => state.lock().unwrap().update_action(Action::Random, false),
-            Linear => state.lock().unwrap().update_action(Action::Linear, false),
-            Update => state.lock().unwrap().update_dir(),
-            Save => state.lock().unwrap().save(),
-            Shuffle => state.lock().unwrap().shuffle(),
-            Hold(img) => {
-                if let Some(img) = img {
-                    state
-                        .lock()
-                        .unwrap()
-                        .update_action(Action::Static(Some(img.into())), true);
-                } else {
-                    state
-                        .lock()
-                        .unwrap()
-                        .update_action(Action::Static(None), false);
+    match ClientMessage::parse_from(split).command {
+        Command::Next => state.lock().unwrap().next(),
+        Command::Stop => stop_server = true,
+        Command::Previous => state.lock().unwrap().prev(),
+        Command::Mode(mode) => match mode {
+            ModeArgs::Linear => state.lock().unwrap().update_action(Action::Linear, false),
+            ModeArgs::Random => state.lock().unwrap().update_action(Action::Random, false),
+            ModeArgs::Static(img) => match img.path {
+                Some(path) => state
+                    .lock()
+                    .unwrap()
+                    .update_action(Action::Static(Some(path)), true),
+                None => state
+                    .lock()
+                    .unwrap()
+                    .update_action(Action::Static(None), false),
+            },
+        },
+        Command::Fallback => state.lock().unwrap().save(),
+        Command::Update => state.lock().unwrap().update_dir(),
+        Command::Shuffle => state.lock().unwrap().shuffle(),
+        Command::Interval(d) => {
+            state.lock().unwrap().change_interval(d.duration);
+        }
+        Command::Get(what) => {
+            response = match what {
+                GetArgs::Wallpaper => state
+                    .lock()
+                    .unwrap()
+                    .get_current_image()
+                    .clone()
+                    .to_str()
+                    .unwrap_or("ERROR")
+                    .to_owned(),
+                GetArgs::Duration => {
+                    format!(
+                        "{} seconds",
+                        state.lock().unwrap().get_change_interval().as_secs()
+                    )
                 }
-            }
-            Interval(d) => {
-                state.lock().unwrap().change_interval(d);
-            }
-            Get(d) => {
-                response = match d {
-                    MessageArgs::Wallpaper => state
-                        .lock()
-                        .unwrap()
-                        .get_current_image()
-                        .clone()
-                        .to_str()
-                        .unwrap_or("ERROR")
-                        .to_owned(),
-                    MessageArgs::Action => {
-                        let action = state.lock().unwrap().get_action();
-                        match action {
-                            Action::Linear => "Linear".to_string(),
-                            Action::Static(_) => "Static".to_string(),
-                            Action::Random => "Random".to_string(),
-                        }
-                    }
-                    MessageArgs::Duration => {
-                        format!("{:?} seconds", state.lock().unwrap().get_change_interval())
+                GetArgs::Mode => {
+                    let action = state.lock().unwrap().get_action();
+                    match action {
+                        Action::Linear => "Linear".to_string(),
+                        Action::Static(_) => "Static".to_string(),
+                        Action::Random => "Random".to_string(),
                     }
                 }
             }
         }
-    } else {
-        response = "I do not understand".to_string();
     }
 
     stream.write(&response.as_bytes()).unwrap();
