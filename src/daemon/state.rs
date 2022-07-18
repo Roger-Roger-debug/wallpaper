@@ -137,16 +137,18 @@ impl State {
                 // unload old image
                 if self.history.len() > 2 {
                     let prev = self.history.iter().rev().nth(2).unwrap();
-                    trace!(
-                        "unloading wallpaper for hyprpaper {}",
-                        prev.to_string_lossy()
-                    );
-                    //thread::sleep(Duration::from_secs(1));
-                    let output = Command::new("hyprctl")
-                        .args(["hyprpaper", "unload"])
-                        .arg(format!("{}", prev.to_string_lossy()))
-                        .output();
-                    info!("{output:?}");
+                    // Don't unload fallback image
+                    if *prev != self.default_image {
+                        trace!(
+                            "unloading wallpaper for hyprpaper {}",
+                            prev.to_string_lossy()
+                        );
+                        let output = Command::new("hyprctl")
+                            .args(["hyprpaper", "unload"])
+                            .arg(format!("{}", prev.to_string_lossy()))
+                            .output();
+                        info!("{output:?}");
+                    }
                 }
             }
         }
@@ -173,6 +175,7 @@ impl State {
             self.action = NextImage::Static;
             self.history.push_back(self.default_image.clone());
         } else {
+            self.action = self.previous_action;
             self.history.pop_back();
         }
         self.update();
