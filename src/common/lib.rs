@@ -16,10 +16,6 @@ pub enum Command {
     /// Display the fallback wallpaper
     /// If called again displays the previous image
     Fallback,
-    /// Update the directory cache
-    Update,
-    /// Shuffle the directory cache
-    Shuffle,
     /// Set the interval for new images in seconds
     Interval(IntervalDuration),
     /// Query information about the current state
@@ -76,8 +72,6 @@ impl Display for Command {
                 }
             },
             Command::Fallback => "fallback".to_string(),
-            Command::Update => "update".to_string(),
-            Command::Shuffle => "shuffle".to_string(),
             Command::Interval(dur) => format!("interval {}", dur.duration.as_secs()),
             Command::Get(what) => match what {
                 GetArgs::Wallpaper => "get wallpaper".to_string(),

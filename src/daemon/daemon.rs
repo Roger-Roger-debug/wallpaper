@@ -16,16 +16,11 @@ use common;
 
 mod state;
 
-use state::State;
+use state::*;
 
 //TODO: error handling
-#[derive(Debug, Clone)]
-pub enum Action {
-    Random,
-    Linear,
-    Static(Option<PathBuf>),
-}
 
+/// Struct to hold and parse cli arguments
 #[derive(Parser, Debug)]
 #[clap(version)]
 pub struct Cli {
@@ -44,29 +39,25 @@ pub struct Cli {
     /// File descriptor to write to to signal readiness
     #[clap(long, default_value_t = 1)]
     fd: RawFd,
+    /// Which underlying program to call to change the wallpaper
     #[clap(subcommand)]
     pub method: WallpaperMethod,
 }
 
+/// Program that gets called to change the active wallpaper
 #[derive(Subcommand, Debug)]
 pub enum WallpaperMethod {
+    /// Use Feh (for xorg)
     Feh,
+    /// Use hyprpaper (for Hyprland / wlroots based wayland compositors)
     Hyprpaper(HyprpaperOptions),
 }
 
+/// Hyprpaper needs a list of monitors. This struct holds them
 #[derive(Args, Debug)]
 pub struct HyprpaperOptions {
-    #[clap(subcommand)]
-    monitor: HyprpaperMonitor,
-}
-
-#[derive(Subcommand, Clone, Debug)]
-pub enum HyprpaperMonitor {
-    //All,
-    List {
-        #[clap(value_parser)]
-        list: Vec<String>,
-    },
+    #[clap(value_parser)]
+    list: Vec<String>,
 }
 
 fn parse_duration(arg: &str) -> Result<std::time::Duration, std::num::ParseIntError> {
@@ -178,26 +169,27 @@ fn handle_connection(mut stream: UnixStream, state: Arc<Mutex<State>>) -> bool {
     split.insert(0, " ");
     let mut stop_server = false;
     match ClientMessage::parse_from(split).command {
-        Command::Next => state.lock().unwrap().next(),
+        Command::Next => state
+            .lock()
+            .unwrap()
+            .change_image(ChangeImageDirection::Next),
         Command::Stop => stop_server = true,
-        Command::Previous => state.lock().unwrap().prev(),
+        Command::Previous => state
+            .lock()
+            .unwrap()
+            .change_image(ChangeImageDirection::Previous),
         Command::Mode(mode) => match mode {
-            ModeArgs::Linear => state.lock().unwrap().update_action(Action::Linear, false),
-            ModeArgs::Random => state.lock().unwrap().update_action(Action::Random, false),
+            ModeArgs::Linear => state.lock().unwrap().update_image(NextImage::Linear, None),
+            ModeArgs::Random => state.lock().unwrap().update_image(NextImage::Random, None),
             ModeArgs::Static(img) => match img.path {
                 Some(path) => state
                     .lock()
                     .unwrap()
-                    .update_action(Action::Static(Some(path)), true),
-                None => state
-                    .lock()
-                    .unwrap()
-                    .update_action(Action::Static(None), false),
+                    .update_image(NextImage::Static, Some(path)),
+                None => state.lock().unwrap().update_image(NextImage::Static, None),
             },
         },
         Command::Fallback => state.lock().unwrap().save(),
-        Command::Update => state.lock().unwrap().update_dir(),
-        Command::Shuffle => state.lock().unwrap().shuffle(),
         Command::Interval(d) => {
             state.lock().unwrap().change_interval(d.duration);
         }
@@ -220,9 +212,9 @@ fn handle_connection(mut stream: UnixStream, state: Arc<Mutex<State>>) -> bool {
                 GetArgs::Mode => {
                     let action = state.lock().unwrap().get_action();
                     match action {
-                        Action::Linear => "Linear".to_string(),
-                        Action::Static(_) => "Static".to_string(),
-                        Action::Random => "Random".to_string(),
+                        NextImage::Linear => "Linear".to_string(),
+                        NextImage::Static => "Static".to_string(),
+                        NextImage::Random => "Random".to_string(),
                     }
                 }
             }
@@ -238,7 +230,7 @@ fn change_interval(data: Arc<Mutex<State>>) {
         let time = {
             //Go out of scope to unlock again
             let mut unlocked = data.lock().unwrap();
-            unlocked.next();
+            unlocked.change_image(ChangeImageDirection::Next);
             unlocked.get_change_interval()
         };
         sleep(time);
