@@ -9,6 +9,7 @@ use crate::WallpaperMethod;
 #[derive(Debug)]
 pub struct State {
     history: VecDeque<PathBuf>, // Never empty
+    history_max_size: usize,
     action: NextImage,
     previous_action: NextImage,
     change_interval: Duration,
@@ -36,12 +37,14 @@ impl State {
         image_dir: PathBuf,
         default_image: PathBuf,
         wallpaper_cmd: WallpaperMethod,
+        history_max_size: usize,
     ) -> Self {
         let mut history = VecDeque::new();
         history.push_back(default_image.clone());
 
         let state = State {
             history,
+            history_max_size,
             action: NextImage::Static,
             previous_action: NextImage::Static,
             change_interval,
@@ -64,7 +67,7 @@ impl State {
             ChangeImageDirection::Next => {
                 info!("Going to the next image");
                 // If not enough space delete one element
-                if self.history.len() >= 25 {
+                if self.history.len() >= self.history_max_size {
                     self.history.pop_front();
                 }
                 let mut idx = fs::read_dir(&self.image_dir)
@@ -151,7 +154,7 @@ impl State {
 
     pub fn update_image(&mut self, action: NextImage, image: Option<PathBuf>) {
         info!("Setting action to {:?}", action);
-        if self.history.len() >= 25 && image.is_some() {
+        if self.history.len() >= self.history_max_size && image.is_some() {
             self.history.pop_front();
         }
         self.previous_action = self.action;

@@ -39,6 +39,9 @@ pub struct Cli {
     /// File descriptor to write to to signal readiness
     #[clap(long, default_value_t = 1)]
     fd: RawFd,
+    /// Maximum size of the history (used for getting the previous wallpaper)
+    #[clap(long, default_value_t = 25)]
+    history_length: usize,
     /// Which underlying program to call to change the wallpaper
     #[clap(subcommand)]
     pub method: WallpaperMethod,
@@ -103,6 +106,7 @@ fn main() {
         image_dir,
         cli.default_image,
         cli.method,
+        cli.history_length,
     )));
 
     info!("Binding socket {:?}", socket);
