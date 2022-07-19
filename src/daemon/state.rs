@@ -9,6 +9,7 @@ use crate::WallpaperMethod;
 #[derive(Debug)]
 pub struct State {
     history: VecDeque<PathBuf>, // Never empty
+    next: Vec<PathBuf>,         // Possibly empty
     history_max_size: usize,
     action: NextImage,
     previous_action: NextImage,
@@ -44,6 +45,7 @@ impl State {
 
         let state = State {
             history,
+            next: Vec::new(),
             history_max_size,
             action: NextImage::Static,
             previous_action: NextImage::Static,
@@ -59,6 +61,9 @@ impl State {
     }
 
     pub fn change_image(&mut self, direction: ChangeImageDirection) {
+        if self.use_fallback {
+            return;
+        }
         if let NextImage::Static = self.action {
             return;
         }
@@ -66,37 +71,42 @@ impl State {
         match direction {
             ChangeImageDirection::Next => {
                 info!("Going to the next image");
-                // If not enough space delete one element
-                if self.history.len() >= self.history_max_size {
-                    self.history.pop_front();
-                }
-                let mut idx = fs::read_dir(&self.image_dir)
-                    .unwrap()
-                    .position(|elem| elem.unwrap().path() == *self.history.back().unwrap())
-                    .unwrap_or(0);
+                if !self.next.is_empty() {
+                    self.history.push_back(self.next.pop().unwrap());
+                } else {
+                    // If not enough space delete one element
+                    if self.history.len() >= self.history_max_size {
+                        self.history.pop_front();
+                    }
+                    let mut idx = fs::read_dir(&self.image_dir)
+                        .unwrap()
+                        .position(|elem| elem.unwrap().path() == *self.history.back().unwrap())
+                        .unwrap_or(0);
 
-                if self.action == NextImage::Random {
-                    idx = rand::thread_rng()
-                        .gen_range(0..fs::read_dir(&self.image_dir).unwrap().count());
-                }
+                    if self.action == NextImage::Random {
+                        idx = rand::thread_rng()
+                            .gen_range(0..fs::read_dir(&self.image_dir).unwrap().count());
+                    }
 
-                self.history.push_back(
-                    fs::read_dir(&self.image_dir).unwrap().nth(idx + 1).map_or(
-                        fs::read_dir(&self.image_dir)
-                            .unwrap()
-                            .next()
-                            .unwrap()
-                            .unwrap()
-                            .path(),
-                        |next| next.unwrap().path(),
-                    ),
-                );
+                    self.history.push_back(
+                        fs::read_dir(&self.image_dir).unwrap().nth(idx + 1).map_or(
+                            fs::read_dir(&self.image_dir)
+                                .unwrap()
+                                .next()
+                                .unwrap()
+                                .unwrap()
+                                .path(),
+                            |next| next.unwrap().path(),
+                        ),
+                    );
+                }
             }
             ChangeImageDirection::Previous => {
                 info!("Going to the previous image");
                 if self.history.len() > 1 {
+                    self.next.push(self.history.pop_back().unwrap());
+                } else {
                     info!("There is no previous image");
-                    self.history.pop_back();
                 }
             }
         }
@@ -159,7 +169,6 @@ impl State {
         if self.history.len() >= self.history_max_size && image.is_some() {
             self.history.pop_front();
         }
-        self.previous_action = self.action;
         self.action = action;
         if image.is_some() {
             self.history.push_back(image.unwrap());
