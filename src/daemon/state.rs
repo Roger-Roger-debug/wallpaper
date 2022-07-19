@@ -205,4 +205,8 @@ impl State {
     pub fn get_change_interval(&self) -> Duration {
         self.change_interval
     }
+
+    pub fn get_fallback(&self) -> bool {
+        self.use_fallback
+    }
 }

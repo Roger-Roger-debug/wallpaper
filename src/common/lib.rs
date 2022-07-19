@@ -47,6 +47,7 @@ pub enum GetArgs {
     Wallpaper,
     Duration,
     Mode,
+    Fallback,
 }
 
 fn parse_duration(arg: &str) -> Result<std::time::Duration, std::num::ParseIntError> {
@@ -77,6 +78,7 @@ impl Display for Command {
                 GetArgs::Wallpaper => "get wallpaper".to_string(),
                 GetArgs::Duration => "get duration".to_string(),
                 GetArgs::Mode => "get mode".to_string(),
+                GetArgs::Fallback => "get fallback".to_string(),
             },
         };
         write!(f, "{args}")

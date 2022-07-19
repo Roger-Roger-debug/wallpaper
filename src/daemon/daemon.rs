@@ -207,12 +207,12 @@ fn handle_connection(mut stream: UnixStream, state: Arc<Mutex<State>>) -> bool {
                     .to_str()
                     .unwrap_or("ERROR")
                     .to_owned(),
-                GetArgs::Duration => {
-                    format!(
-                        "{} seconds",
-                        state.lock().unwrap().get_change_interval().as_secs()
-                    )
-                }
+                GetArgs::Duration => state
+                    .lock()
+                    .unwrap()
+                    .get_change_interval()
+                    .as_secs()
+                    .to_string(),
                 GetArgs::Mode => {
                     let action = state.lock().unwrap().get_action();
                     match action {
@@ -221,6 +221,7 @@ fn handle_connection(mut stream: UnixStream, state: Arc<Mutex<State>>) -> bool {
                         NextImage::Random => "Random".to_string(),
                     }
                 }
+                GetArgs::Fallback => state.lock().unwrap().get_fallback().to_string(),
             }
         }
     }
