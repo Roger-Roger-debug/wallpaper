@@ -19,6 +19,7 @@ path = "src/common/lib.rs"
 
 [profile.release]
 strip = true  # Automatically strip symbols from the binary.
+lto = true
 
 [dependencies]
 log = "0.4.17"
