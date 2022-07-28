@@ -38,7 +38,6 @@ pub enum ModeArgs {
 
 #[derive(Args)]
 pub struct Image {
-    #[clap(short, long)]
     pub path: Option<PathBuf>,
 }
 
