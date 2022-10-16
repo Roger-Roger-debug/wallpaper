@@ -98,7 +98,7 @@ fn main() {
     let image_dir = cli.wallpaper_directory.unwrap_or_else(|| {
         let mut pathbuf = PathBuf::new();
         pathbuf.push(std::env::var("HOME").expect("$HOME not set"));
-        pathbuf.push(PathBuf::from("Pictures/backgrounds"));
+        pathbuf.push(PathBuf::from("Pictures/wallpapers"));
         pathbuf
     });
 
