@@ -1,7 +1,16 @@
 #![warn(missing_docs)]
-use log::{info, trace};
+use clap::clap_derive::ArgEnum;
+use log::{error, info, trace};
 use rand::Rng;
-use std::{collections::VecDeque, fs, path::PathBuf, process::Command, time::Duration};
+use std::{
+    collections::VecDeque,
+    fs,
+    io::{Read, Write},
+    os::unix::net::UnixStream,
+    path::PathBuf,
+    process::Command,
+    time::Duration,
+};
 
 use crate::WallpaperMethod;
 
@@ -20,7 +29,7 @@ pub struct State {
     wallpaper_cmd: WallpaperMethod,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, ArgEnum)]
 pub enum NextImage {
     Random,
     Linear,
@@ -37,34 +46,34 @@ impl State {
         change_interval: Duration,
         image_dir: PathBuf,
         default_image: PathBuf,
+        action: NextImage,
         wallpaper_cmd: WallpaperMethod,
         history_max_size: usize,
     ) -> Self {
         let mut history = VecDeque::new();
         history.push_back(default_image.clone());
 
-        let state = State {
+        State {
             history,
             next: Vec::new(),
             history_max_size,
-            action: NextImage::Static,
-            previous_action: NextImage::Static,
+            action,
+            previous_action: action,
             change_interval,
             image_dir,
             use_fallback: false,
             default_image,
             wallpaper_cmd,
-        };
-        trace!("Construction state:\n{:?}", state);
-        state.update();
-        state
+        }
     }
 
     pub fn change_image(&mut self, direction: ChangeImageDirection) {
         if self.use_fallback {
+            info!("Can't change image while using fallback");
             return;
         }
         if let NextImage::Static = self.action {
+            info!("Can't change image while in static mode");
             return;
         }
 
@@ -111,12 +120,15 @@ impl State {
             }
         }
 
-        self.update();
+        if let Err(_) = self.update() {
+            error!("Error setting the wallpaper");
+        }
     }
 
-    pub fn update(&self) {
-        trace!("Updating current wallpaper");
-        let path = self.history.back().unwrap().clone();
+    pub fn update(&self) -> Result<(), ()> {
+        info!("Updating current wallpaper");
+        let path = self.get_current_image();
+        trace!("setting wallpaper to {}", path.to_string_lossy());
         match &self.wallpaper_cmd {
             WallpaperMethod::Feh => {
                 let mut process = Command::new("feh")
@@ -127,41 +139,51 @@ impl State {
                 process.wait().unwrap();
             }
             WallpaperMethod::Hyprpaper(args) => {
-                trace!("Current stack {:?}", self.history);
-                trace!("setting wallpaper for hyprpaper {}", path.to_string_lossy());
-                // preload image
-                let output = Command::new("hyprctl")
-                    .args(["hyprpaper", "preload"])
-                    .arg(format!("{}", path.to_string_lossy()))
-                    .output();
-                info!("{output:?}");
-                // set image
-                args.list.iter().for_each(|monitor| {
-                    trace!("Setting wallpaper for monitor {monitor}");
-                    let output = Command::new("hyprctl")
-                        .args(["hyprpaper", "wallpaper"])
-                        .arg(format!("{monitor},{}", path.to_string_lossy()))
-                        .output();
-                    info!("{output:?}");
-                });
-                // unload old image
+                // Preload the wallpaper
+                self.send_to_hyprpaper(
+                    format!("preload {}", self.get_current_image().to_string_lossy()).as_bytes(),
+                )?;
+                // Display the wallpaper on every monitor
+                for monitor in args.monitors.iter() {
+                    self.send_to_hyprpaper(
+                        format!(
+                            "wallpaper {monitor},{}",
+                            self.get_current_image().to_string_lossy()
+                        )
+                        .as_bytes(),
+                    )?;
+                }
+
                 if self.history.len() > 2 {
                     let prev = self.history.iter().rev().nth(2).unwrap();
-                    // Don't unload fallback image
-                    if *prev != self.default_image {
-                        trace!(
-                            "unloading wallpaper for hyprpaper {}",
-                            prev.to_string_lossy()
-                        );
-                        let output = Command::new("hyprctl")
-                            .args(["hyprpaper", "unload"])
-                            .arg(format!("{}", prev.to_string_lossy()))
-                            .output();
-                        info!("{output:?}");
+                    if prev != self.get_current_image() {
+                        self.send_to_hyprpaper(
+                            format!("unload {}", prev.to_string_lossy()).as_bytes(),
+                        )?;
                     }
                 }
             }
         }
+        Ok(())
+    }
+
+    fn send_to_hyprpaper(&self, msg: &[u8]) -> Result<String, ()> {
+        let signature = std::env::var("HYPRLAND_INSTANCE_SIGNATURE").map_err(|_| ())?;
+        let path: PathBuf = ["/tmp/hypr", &signature, ".hyprpaper.sock"]
+            .iter()
+            .collect();
+
+        info!("Connecting to socket at {}", path.to_string_lossy());
+
+        let mut listener = UnixStream::connect(path).map_err(|_| ())?;
+        listener.write_all(msg).map_err(|_| ())?;
+
+        listener.flush().map_err(|_| ())?;
+        let mut buffer = String::new();
+        listener.read_to_string(&mut buffer).map_err(|_| ())?;
+
+        info!("Got result: {buffer}");
+        Ok(buffer)
     }
 
     pub fn update_image(&mut self, action: NextImage, image: Option<PathBuf>) {
@@ -172,7 +194,9 @@ impl State {
         self.action = action;
         if image.is_some() {
             self.history.push_back(image.unwrap());
-            self.update();
+            if let Err(_) = self.update() {
+                error!("Error setting the wallpaper");
+            }
         }
     }
 
@@ -187,7 +211,9 @@ impl State {
             self.action = self.previous_action;
             self.history.pop_back();
         }
-        self.update();
+        if let Err(_) = self.update() {
+            error!("Error setting the wallpaper");
+        }
     }
 
     pub fn get_current_image(&self) -> &PathBuf {
