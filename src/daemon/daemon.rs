@@ -10,7 +10,7 @@ use std::thread::{self, sleep};
 use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand};
-use log::info;
+use log::{debug, error, info};
 
 use common;
 
@@ -32,16 +32,18 @@ pub struct Cli {
     socket: Option<PathBuf>,
     /// Directory to search for images, defaults to $HOME/Pictures/backgrounds
     #[clap(short, long, value_parser, value_name = "DIRECTORY")]
-    image_directory: Option<PathBuf>,
+    wallpaper_directory: Option<PathBuf>,
     /// Time in seconds between wallpaper changes
-    #[clap(long, parse(try_from_str = parse_duration))]
+    #[clap(short, long, parse(try_from_str = parse_duration))]
     interval: Option<Duration>,
     /// File descriptor to write to to signal readiness
-    #[clap(long, default_value_t = 1)]
-    fd: RawFd,
+    #[clap(long)]
+    fd: Option<RawFd>,
     /// Maximum size of the history (used for getting the previous wallpaper)
     #[clap(long, default_value_t = 25)]
     history_length: usize,
+    #[clap(short, long, arg_enum, default_value_t = NextImage::Static)]
+    mode: NextImage,
     /// Which underlying program to call to change the wallpaper
     #[clap(subcommand)]
     pub method: WallpaperMethod,
@@ -60,7 +62,7 @@ pub enum WallpaperMethod {
 #[derive(Args, Debug)]
 pub struct HyprpaperOptions {
     #[clap(value_parser)]
-    list: Vec<String>,
+    monitors: Vec<String>,
 }
 
 fn parse_duration(arg: &str) -> Result<std::time::Duration, std::num::ParseIntError> {
@@ -72,7 +74,7 @@ fn main() {
     pretty_env_logger::init();
 
     let cli = Cli::parse();
-    info!("Command run was:\n{:?}", &cli);
+    debug!("Command run was:\n{:?}", &cli);
     let socket = cli.socket.unwrap_or_else(|| {
         if let Ok(path) = std::env::var("XDG_RUNTIME_DIR") {
             let mut pathbuf = PathBuf::new();
@@ -87,13 +89,13 @@ fn main() {
     let s = socket.clone();
     ctrlc::set_handler(move || {
         if let Err(_) = fs::remove_file(&s) {
-            log::error!("Couldn't delete socket file");
+            error!("Couldn't delete socket file");
         }
-        exit(0);
+        exit(1);
     })
     .expect("Error setting signal hooks");
 
-    let image_dir = cli.image_directory.unwrap_or_else(|| {
+    let image_dir = cli.wallpaper_directory.unwrap_or_else(|| {
         let mut pathbuf = PathBuf::new();
         pathbuf.push(std::env::var("HOME").expect("$HOME not set"));
         pathbuf.push(PathBuf::from("Pictures/backgrounds"));
@@ -105,6 +107,7 @@ fn main() {
         time,
         image_dir,
         cli.default_image,
+        cli.mode,
         cli.method,
         cli.history_length,
     )));
@@ -113,8 +116,10 @@ fn main() {
     let listener = UnixListener::bind(&socket).unwrap();
     let mut incoming = listener.incoming();
 
-    let mut file = unsafe { File::from_raw_fd(cli.fd) };
-    write!(&mut file, "\n").unwrap();
+    if cli.fd.is_some() {
+        let mut file = unsafe { File::from_raw_fd(cli.fd.unwrap()) };
+        write!(&mut file, "\n").unwrap();
+    }
 
     let d = data.clone();
     thread::spawn(move || change_interval(d));
@@ -130,7 +135,8 @@ fn main() {
     }
 
     if let Err(_) = fs::remove_file(&socket) {
-        log::error!("Couldn't delete socket file");
+        error!("Couldn't delete socket file");
+        exit(1);
     }
     exit(0);
 }
@@ -164,11 +170,10 @@ fn handle_connection(mut stream: UnixStream, state: Arc<Mutex<State>>) -> bool {
     use common::*;
     use std::io::prelude::*;
     info!("Handle new connection");
-    let mut line = read_from_stream(&stream);
+    let line = read_from_stream(&stream);
     let mut response = "".to_string();
 
-    line = line.to_lowercase();
-    info!("Got {}", &line);
+    debug!("Got {}", &line);
     let mut split: Vec<&str> = line.split(" ").collect();
     split.insert(0, " ");
     let mut stop_server = false;
