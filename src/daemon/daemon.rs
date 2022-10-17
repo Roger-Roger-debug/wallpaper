@@ -236,13 +236,18 @@ fn handle_connection(mut stream: UnixStream, state: Arc<Mutex<State>>) -> bool {
 }
 
 fn change_interval(data: Arc<Mutex<State>>) {
+    let mut time = {
+        //Go out of scope to unlock again
+        let unlocked = data.lock().unwrap();
+        unlocked.get_change_interval()
+    };
     loop {
-        let time = {
+        sleep(time);
+        {
             //Go out of scope to unlock again
             let mut unlocked = data.lock().unwrap();
             unlocked.change_image(ChangeImageDirection::Next);
-            unlocked.get_change_interval()
+            time = unlocked.get_change_interval()
         };
-        sleep(time);
     }
 }
