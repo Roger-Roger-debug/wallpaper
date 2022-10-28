@@ -1,6 +1,6 @@
 #![warn(missing_docs)]
 use clap::clap_derive::ArgEnum;
-use log::{error, info, trace};
+use log::{error, info, trace, warn};
 use rand::Rng;
 use std::{
     collections::VecDeque,
@@ -14,12 +14,52 @@ use std::{
 
 use crate::WallpaperMethod;
 
+#[derive(Debug)]
+struct History {
+    previous: VecDeque<PathBuf>, // Never empty
+    next: Vec<PathBuf>,          // Possibly empty
+    history_max_size: usize,
+}
+
+impl History {
+    fn has_next(&self) -> bool {
+        !self.next.is_empty()
+    }
+
+    fn has_previous(&self) -> bool {
+        // previous must not be empty
+        self.previous.len() >= 2
+    }
+
+    fn go_next(&mut self) {
+        if self.has_next() {
+            let image = self.next.pop().unwrap();
+            self.push_back(image);
+        } else {
+            warn!("Calling go_next without next image existing");
+        }
+    }
+
+    fn go_previous(&mut self) {
+        if self.has_previous() {
+            self.next.push(self.previous.pop_back().unwrap());
+        } else {
+            warn!("Calling go_previous without previous image existing");
+        }
+    }
+
+    fn push_back(&mut self, path: PathBuf) {
+        if self.previous.len() >= self.history_max_size {
+            self.previous.pop_front();
+        }
+        self.previous.push_back(path);
+    }
+}
+
 /// Global object to store the current state
 #[derive(Debug)]
 pub struct State {
-    history: VecDeque<PathBuf>, // Never empty
-    next: Vec<PathBuf>,         // Possibly empty
-    history_max_size: usize,
+    history: History,
     action: NextImage,
     previous_action: NextImage,
     change_interval: Duration,
@@ -54,9 +94,11 @@ impl State {
         history.push_back(default_image.clone());
 
         State {
-            history,
-            next: Vec::new(),
-            history_max_size,
+            history: History {
+                previous: history,
+                next: Vec::new(),
+                history_max_size,
+            },
             action,
             previous_action: action,
             change_interval,
@@ -80,47 +122,49 @@ impl State {
         match direction {
             ChangeImageDirection::Next => {
                 info!("Going to the next image");
-                if !self.next.is_empty() {
-                    self.history.push_back(self.next.pop().unwrap());
+                // "Redo"
+                if self.history.has_next() {
+                    self.history.go_next();
                 } else {
                     // If not enough space delete one element
-                    if self.history.len() >= self.history_max_size {
-                        self.history.pop_front();
-                    }
-                    let mut idx = fs::read_dir(&self.image_dir)
-                        .unwrap()
-                        .position(|elem| elem.unwrap().path() == *self.history.back().unwrap())
+                    let mut idx = fs::read_dir(&self.image_dir).unwrap()
+                        .filter_map(|res| res.ok().map(|e| e.path()))
+                        .position(|elem| {
+                            elem == *self.history.previous.back().unwrap()
+                        })
                         .unwrap_or(0);
 
+                    let num_pics = fs::read_dir(&self.image_dir).unwrap()
+                        .filter_map(|res| res.ok().map(|e| e.path()))
+                        .count();
+
                     if self.action == NextImage::Random {
-                        idx = rand::thread_rng()
-                            .gen_range(0..fs::read_dir(&self.image_dir).unwrap().count());
+                        idx = rand::thread_rng().gen_range(0..num_pics);
+                    } else {
+                        idx += 1;
+                        idx %= num_pics;
                     }
 
                     self.history.push_back(
-                        fs::read_dir(&self.image_dir).unwrap().nth(idx + 1).map_or(
-                            fs::read_dir(&self.image_dir)
-                                .unwrap()
-                                .next()
-                                .unwrap()
-                                .unwrap()
-                                .path(),
-                            |next| next.unwrap().path(),
-                        ),
+                        fs::read_dir(&self.image_dir).unwrap()
+                            .filter_map(|res| res.ok().map(|e| e.path()))
+                            .nth(idx)
+                            .unwrap()
                     );
                 }
             }
             ChangeImageDirection::Previous => {
                 info!("Going to the previous image");
-                if self.history.len() > 1 {
-                    self.next.push(self.history.pop_back().unwrap());
+                if self.history.has_previous() {
+                    self.history.go_previous();
                 } else {
                     info!("There is no previous image");
                 }
             }
         }
 
-        if let Err(_) = self.update() {
+        // Update current image
+        if self.update().is_err() {
             error!("Error setting the wallpaper");
         }
     }
@@ -154,8 +198,8 @@ impl State {
                     )?;
                 }
 
-                if self.history.len() > 2 {
-                    let prev = self.history.iter().rev().nth(2).unwrap();
+                if self.history.previous.len() > 2 {
+                    let prev = self.history.previous.iter().rev().nth(2).unwrap();
                     if prev != self.get_current_image() {
                         self.send_to_hyprpaper(
                             format!("unload {}", prev.to_string_lossy()).as_bytes(),
@@ -186,15 +230,12 @@ impl State {
         Ok(buffer)
     }
 
-    pub fn update_image(&mut self, action: NextImage, image: Option<PathBuf>) {
+    pub fn update_action(&mut self, action: NextImage, image: Option<PathBuf>) {
         info!("Setting action to {:?}", action);
-        if self.history.len() >= self.history_max_size && image.is_some() {
-            self.history.pop_front();
-        }
         self.action = action;
-        if image.is_some() {
-            self.history.push_back(image.unwrap());
-            if let Err(_) = self.update() {
+        if let Some(image) = image {
+            self.history.push_back(image);
+            if self.update().is_err() {
                 error!("Error setting the wallpaper");
             }
         }
@@ -209,15 +250,15 @@ impl State {
             self.history.push_back(self.default_image.clone());
         } else {
             self.action = self.previous_action;
-            self.history.pop_back();
+            self.history.previous.pop_back();
         }
-        if let Err(_) = self.update() {
+        if self.update().is_err() {
             error!("Error setting the wallpaper");
         }
     }
 
     pub fn get_current_image(&self) -> &PathBuf {
-        &self.history.back().unwrap()
+        self.history.previous.back().unwrap()
     }
 
     pub fn get_action(&self) -> NextImage {

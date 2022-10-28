@@ -12,8 +12,6 @@ use std::time::Duration;
 use clap::{Args, Parser, Subcommand};
 use log::{debug, error, info};
 
-use common;
-
 mod state;
 
 use state::*;
@@ -26,13 +24,13 @@ use state::*;
 pub struct Cli {
     /// Image to show by default
     #[clap(short, long, value_parser, value_name = "FILE")]
-    default_image: PathBuf,
+    default: PathBuf,
     /// Socket for communication
     #[clap(short, long, value_parser, value_name = "FILE")]
     socket: Option<PathBuf>,
-    /// Directory to search for images, defaults to $HOME/Pictures/backgrounds
+    /// Directory to search for images
     #[clap(short, long, value_parser, value_name = "DIRECTORY")]
-    wallpaper_directory: Option<PathBuf>,
+    wallpaper_directory: PathBuf,
     /// Time in seconds between wallpaper changes
     #[clap(short, long, parse(try_from_str = parse_duration))]
     interval: Option<Duration>,
@@ -181,14 +179,14 @@ fn handle_connection(mut stream: UnixStream, state: Arc<Mutex<State>>) -> bool {
             .unwrap()
             .change_image(ChangeImageDirection::Previous),
         Command::Mode(mode) => match mode {
-            ModeArgs::Linear => state.lock().unwrap().update_image(NextImage::Linear, None),
-            ModeArgs::Random => state.lock().unwrap().update_image(NextImage::Random, None),
+            ModeArgs::Linear => state.lock().unwrap().update_action(NextImage::Linear, None),
+            ModeArgs::Random => state.lock().unwrap().update_action(NextImage::Random, None),
             ModeArgs::Static(img) => match img.path {
                 Some(path) => state
                     .lock()
                     .unwrap()
-                    .update_image(NextImage::Static, Some(path)),
-                None => state.lock().unwrap().update_image(NextImage::Static, None),
+                    .update_action(NextImage::Static, Some(path)),
+                None => state.lock().unwrap().update_action(NextImage::Static, None),
             },
         },
         Command::Fallback => state.lock().unwrap().save(),
