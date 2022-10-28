@@ -88,25 +88,18 @@ fn main() {
 
     let s = socket.clone();
     ctrlc::set_handler(move || {
-        if let Err(_) = fs::remove_file(&s) {
+        if fs::remove_file(&s).is_err() {
             error!("Couldn't delete socket file");
         }
         exit(1);
     })
     .expect("Error setting signal hooks");
 
-    let image_dir = cli.wallpaper_directory.unwrap_or_else(|| {
-        let mut pathbuf = PathBuf::new();
-        pathbuf.push(std::env::var("HOME").expect("$HOME not set"));
-        pathbuf.push(PathBuf::from("Pictures/wallpapers"));
-        pathbuf
-    });
-
     let time = cli.interval.unwrap_or(Duration::new(60, 0));
     let data = Arc::new(Mutex::new(State::new(
         time,
-        image_dir,
-        cli.default_image,
+        cli.wallpaper_directory,
+        cli.default,
         cli.mode,
         cli.method,
         cli.history_length,
@@ -114,17 +107,17 @@ fn main() {
 
     info!("Binding socket {:?}", socket);
     let listener = UnixListener::bind(&socket).unwrap();
-    let mut incoming = listener.incoming();
+    let incoming = listener.incoming();
 
     if cli.fd.is_some() {
         let mut file = unsafe { File::from_raw_fd(cli.fd.unwrap()) };
-        write!(&mut file, "\n").unwrap();
+        writeln!(&mut file).unwrap();
     }
 
     let d = data.clone();
     thread::spawn(move || change_interval(d));
 
-    while let Some(stream) = incoming.next() {
+    for stream in incoming {
         let d = data.clone();
         let handle = thread::spawn(move || handle_connection(stream.unwrap(), d));
         if let Ok(res) = handle.join() {
@@ -134,7 +127,7 @@ fn main() {
         }
     }
 
-    if let Err(_) = fs::remove_file(&socket) {
+    if fs::remove_file(&socket).is_err() {
         error!("Couldn't delete socket file");
         exit(1);
     }
@@ -147,12 +140,12 @@ fn read_from_stream(mut stream: &UnixStream) -> String {
     //First run get length
     let mut buf: [u8; 8] = [0; 8];
 
-    if let Err(_) = stream.read_exact(&mut buf) {
+    if stream.read_exact(&mut buf).is_err() {
         return string;
     }
 
     let mut buffer = vec![0; usize::from_ne_bytes(buf)];
-    if let Err(_) = stream.read_exact(&mut buffer) {
+    if stream.read_exact(&mut buffer).is_err() {
         string
     } else {
         String::from_utf8(buffer).unwrap()
@@ -174,7 +167,7 @@ fn handle_connection(mut stream: UnixStream, state: Arc<Mutex<State>>) -> bool {
     let mut response = "".to_string();
 
     debug!("Got {}", &line);
-    let mut split: Vec<&str> = line.split(" ").collect();
+    let mut split: Vec<&str> = line.split(' ').collect();
     split.insert(0, " ");
     let mut stop_server = false;
     match ClientMessage::parse_from(split).command {
@@ -231,7 +224,7 @@ fn handle_connection(mut stream: UnixStream, state: Arc<Mutex<State>>) -> bool {
         }
     }
 
-    stream.write(&response.as_bytes()).unwrap();
+    stream.write_all(response.as_bytes()).unwrap();
     stop_server
 }
 

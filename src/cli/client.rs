@@ -40,8 +40,8 @@ fn main() {
 
     info!("Sending {:?}", args);
     {
-        socket.write(&len.to_ne_bytes()).unwrap();
-        socket.write(args.trim().as_bytes()).unwrap();
+        socket.write_all(&len.to_ne_bytes()).unwrap();
+        socket.write_all(args.trim().as_bytes()).unwrap();
         info!("{:?}", &len.to_ne_bytes());
         info!("{:?}", args.trim().as_bytes());
         socket.flush().unwrap();
