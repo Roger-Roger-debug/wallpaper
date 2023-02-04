@@ -127,14 +127,14 @@ impl State {
                     self.history.go_next();
                 } else {
                     // If not enough space delete one element
-                    let mut idx = fs::read_dir(&self.image_dir).unwrap()
+                    let mut idx = fs::read_dir(&self.image_dir)
+                        .unwrap()
                         .filter_map(|res| res.ok().map(|e| e.path()))
-                        .position(|elem| {
-                            elem == *self.history.previous.back().unwrap()
-                        })
+                        .position(|elem| elem == *self.history.previous.back().unwrap())
                         .unwrap_or(0);
 
-                    let num_pics = fs::read_dir(&self.image_dir).unwrap()
+                    let num_pics = fs::read_dir(&self.image_dir)
+                        .unwrap()
                         .filter_map(|res| res.ok().map(|e| e.path()))
                         .count();
 
@@ -146,10 +146,11 @@ impl State {
                     }
 
                     self.history.push_back(
-                        fs::read_dir(&self.image_dir).unwrap()
+                        fs::read_dir(&self.image_dir)
+                            .unwrap()
                             .filter_map(|res| res.ok().map(|e| e.path()))
                             .nth(idx)
-                            .unwrap()
+                            .unwrap(),
                     );
                 }
             }
@@ -176,7 +177,8 @@ impl State {
         match &self.wallpaper_cmd {
             WallpaperMethod::Feh => {
                 let mut process = Command::new("feh")
-                    .arg("--bg-scale")
+                    .arg("--bg-fill")
+                    .arg("-r")
                     .arg(path)
                     .spawn()
                     .unwrap();
