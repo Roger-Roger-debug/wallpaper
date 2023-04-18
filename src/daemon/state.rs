@@ -67,6 +67,7 @@ pub struct State {
     use_fallback: bool,
     default_image: PathBuf,
     wallpaper_cmd: WallpaperMethod,
+    recusive: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, ArgEnum)]
@@ -89,6 +90,7 @@ impl State {
         action: NextImage,
         wallpaper_cmd: WallpaperMethod,
         history_max_size: usize,
+        recusive: bool,
     ) -> Self {
         let mut history = VecDeque::new();
         history.push_back(default_image.clone());
@@ -106,6 +108,7 @@ impl State {
             use_fallback: false,
             default_image,
             wallpaper_cmd,
+            recusive,
         }
     }
 
@@ -176,12 +179,20 @@ impl State {
         trace!("setting wallpaper to {}", path.to_string_lossy());
         match &self.wallpaper_cmd {
             WallpaperMethod::Feh => {
-                let mut process = Command::new("feh")
-                    .arg("--bg-fill")
-                    .arg("-r")
-                    .arg(path)
-                    .spawn()
-                    .unwrap();
+                let mut process = if self.recusive {
+                    Command::new("feh")
+                        .arg("-r")
+                        .arg("--bg-fill")
+                        .arg(path)
+                        .spawn()
+                        .unwrap()
+                } else {
+                    Command::new("feh")
+                        .arg("--bg-fill")
+                        .arg(path)
+                        .spawn()
+                        .unwrap()
+                };
                 process.wait().unwrap();
             }
             WallpaperMethod::Hyprpaper(args) => {
