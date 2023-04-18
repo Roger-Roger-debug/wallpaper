@@ -31,6 +31,15 @@ pub struct Cli {
     /// Directory to search for images
     #[clap(short, long, value_parser, value_name = "DIRECTORY")]
     wallpaper_directory: PathBuf,
+    /// Seach for images recursively
+    #[clap(
+        short,
+        long,
+        value_parser,
+        value_name = "RECURSIVE",
+        default_value_t = false
+    )]
+    wallpaper_recursivly: bool,
     /// Time in seconds between wallpaper changes
     #[clap(short, long, parse(try_from_str = parse_duration))]
     interval: Option<Duration>,
@@ -101,6 +110,7 @@ fn main() {
         cli.mode,
         cli.method,
         cli.history_length,
+        cli.wallpaper_recursivly,
     )));
 
     info!("Binding socket {:?}", socket);
